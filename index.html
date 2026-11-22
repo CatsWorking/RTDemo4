@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Ray Tracing Demo 4 — Software Path Tracer</title>
+<meta name="description" content="Ray Tracing Demo 4 — a hardware-free software path tracer with volumetric lighting, in-world movement gizmos and render export. Tuned for GTX 1070-class GPUs.">
+<link rel="stylesheet" href="./css/style.css?v=6">
+</head>
+<body>
+
+<canvas id="view" aria-label="Ray traced viewport"></canvas>
+<div id="crosshair" hidden></div>
+<div id="pip-frame" hidden><span id="pip-label">RENDER CAMERA</span></div>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="brand-mark">RT</span>
+    <div class="brand-text">
+      <strong>RAY TRACING DEMO <em>4</em></strong>
+      <small>SOFTWARE PATH TRACER · GTX&nbsp;1070&nbsp;TUNED</small>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button id="btn-look" class="btn btn-accent" title="Toggle mouse look (Tab)">Look</button>
+    <button id="btn-shot" class="btn" title="Quick screenshot (F)">Shot</button>
+    <button id="btn-save" class="btn" title="Save scene as JSON">Save</button>
+    <button id="btn-load" class="btn" title="Load scene JSON">Load</button>
+    <button id="btn-help" class="btn btn-ghost" title="Controls &amp; help (H)">Help</button>
+    <button id="btn-about" class="btn btn-ghost">About</button>
+    <button id="btn-changelog" class="btn btn-ghost">v4</button>
+    <input type="file" id="file-load" accept="application/json,.json" hidden>
+  </div>
+</header>
+
+<aside id="panel-left" class="panel">
+  <div class="panel-head"><span>Scene</span><em id="scene-name">Classic</em></div>
+
+  <section class="group">
+    <h3>Presets</h3>
+    <div class="preset-grid" id="preset-grid">
+      <button class="preset-btn" data-preset="classic">Classic</button>
+      <button class="preset-btn" data-preset="cornell">Cornell Box</button>
+      <button class="preset-btn" data-preset="neon">Neon Alley</button>
+      <button class="preset-btn" data-preset="mirror">Mirror Hall</button>
+      <button class="preset-btn" data-preset="orb">Orb Field</button>
+      <button class="preset-btn" data-preset="studio">Studio</button>
+      <button class="preset-btn" data-preset="dunes">Dunes</button>
+      <button class="preset-btn" data-preset="void">Empty Void</button>
+    </div>
+  </section>
+
+  <section class="group">
+    <h3>Add Object</h3>
+    <div class="row two">
+      <button id="btn-add-cube" class="btn">+ Cube</button>
+      <button id="btn-add-sphere" class="btn">+ Sphere</button>
+    </div>
+    <div class="row two">
+      <button id="btn-remix" class="btn">Remix</button>
+      <button id="btn-clear" class="btn btn-danger">Clear</button>
+    </div>
+  </section>
+
+  <section class="group grow">
+    <h3>Objects <span class="muted" id="outliner-count">0/96</span></h3>
+    <div id="outliner" class="outliner"></div>
+  </section>
+
+  <section class="group perf">
+    <h3>Performance</h3>
+    <div class="perf-grid">
+      <div><span>FPS</span><b id="stat-fps">—</b></div>
+      <div><span>Frame</span><b id="stat-ms">—</b></div>
+      <div><span>Samples</span><b id="stat-spp">—</b></div>
+      <div><span>Objects</span><b id="stat-objs">—</b></div>
+      <div><span>Res</span><b id="stat-res">—</b></div>
+      <div><span>Scale</span><b id="stat-scale">—</b></div>
+    </div>
+    <canvas id="sparkline" width="240" height="30"></canvas>
+    <div class="perf-state" id="stat-state">SAMPLING</div>
+  </section>
+</aside>
+
+<aside id="panel-right" class="panel">
+  <div class="tabs" id="tabs">
+    <button class="tab-btn active" data-tab="object">Object</button>
+    <button class="tab-btn" data-tab="world">World</button>
+    <button class="tab-btn" data-tab="render">Render</button>
+    <button class="tab-btn" data-tab="export">Export</button>
+  </div>
+
+  <div class="tab-panel active" id="tab-object">
+    <div id="sel-empty" class="empty-state">
+      <p>Nothing selected.</p>
+      <p class="muted">Click an object in the ray traced view, or pick one from the Objects list.</p>
+      <p class="hint-box">Move objects by dragging the <b>red</b>, <b>green</b> and <b>blue</b> arrows in the world. The centre cube drags freely on the camera plane. Hold <b>Shift</b> to snap to 0.25&nbsp;units.</p>
+    </div>
+    <div id="sel-body" hidden>
+      <div class="sel-head">
+        <span class="dot" id="sel-dot"></span>
+        <b id="sel-name">Sphere</b>
+        <span class="muted" id="sel-id"></span>
+      </div>
+      <div class="pose" id="sel-pos">
+        <span>X <b id="pos-x">0.00</b></span>
+        <span>Y <b id="pos-y">0.00</b></span>
+        <span>Z <b id="pos-z">0.00</b></span>
+      </div>
+
+      <label class="field">Material
+        <select id="sel-material">
+          <option value="0">Matte</option>
+          <option value="1">Metal · Chrome</option>
+          <option value="2">Glass · Dielectric</option>
+          <option value="3">Neon · Emissive</option>
+          <option value="4">Glossy · Plastic</option>
+        </select>
+      </label>
+
+      <div class="row field">
+        <label class="inline">Color <input type="color" id="sel-color" value="#ffffff"></label>
+      </div>
+
+      <label class="field"><span id="sel-prop-label">Sheen</span> <b id="sel-prop-value" class="mono">0.50</b>
+        <input type="range" id="sel-prop" min="0" max="1" step="0.01" value="0.5">
+      </label>
+
+      <div class="field">
+        <div class="field-head"><span>Size</span>
+          <label class="check small"><input type="checkbox" id="sel-size-link" checked> linked</label>
+        </div>
+        <label class="slider-row"><span>X</span><input type="range" id="sel-size-x" min="0.1" max="8" step="0.05" value="1"><b id="size-x-val" class="mono">1.0</b></label>
+        <label class="slider-row" id="size-yz-row"><span>Y</span><input type="range" id="sel-size-y" min="0.1" max="8" step="0.05" value="1"><b id="size-y-val" class="mono">1.0</b></label>
+        <label class="slider-row" id="size-z-row"><span>Z</span><input type="range" id="sel-size-z" min="0.1" max="8" step="0.05" value="1"><b id="size-z-val" class="mono">1.0</b></label>
+      </div>
+
+      <div class="row two gap">
+        <button id="btn-duplicate" class="btn">Duplicate</button>
+        <button id="btn-delete" class="btn btn-danger">Delete</button>
+      </div>
+      <button id="btn-floor" class="btn wide">Drop to Floor</button>
+      <button id="btn-focus" class="btn wide">Focus DOF on Object</button>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-world">
+    <div class="group tight">
+      <h3>Sun &amp; Sky</h3>
+      <label class="field">Time of day <b id="time-label" class="mono">14:00</b>
+        <input type="range" id="env-time" min="0" max="24" step="0.05" value="14">
+      </label>
+      <label class="check"><input type="checkbox" id="env-animate"> Animate sun cycle</label>
+      <label class="inline field">Sun tint <input type="color" id="env-sun-color" value="#fff2dc"></label>
+      <label class="field">Exposure <b id="exposure-value" class="mono">1.00</b>
+        <input type="range" id="fx-exposure" min="0.2" max="3" step="0.01" value="1">
+      </label>
+    </div>
+
+    <div class="group tight">
+      <h3>Volumetric Lighting</h3>
+      <label class="field">Fog density <b id="fog-value" class="mono">0.012</b>
+        <input type="range" id="env-fog" min="0" max="0.08" step="0.001" value="0.012">
+      </label>
+      <label class="field">Scattering <b id="aniso-value" class="mono">0.40</b>
+        <input type="range" id="env-aniso" min="-0.3" max="0.92" step="0.01" value="0.4">
+      </label>
+      <label class="field">Height falloff <b id="fogheight-value" class="mono">0.12</b>
+        <input type="range" id="env-fogheight" min="0" max="0.6" step="0.01" value="0.12">
+      </label>
+      <label class="field">Emissive glow <b id="fogglow-value" class="mono">1.00</b>
+        <input type="range" id="env-fogglow" min="0" max="3" step="0.05" value="1">
+      </label>
+      <label class="field">Quality
+        <select id="env-vol">
+          <option value="0">Off</option>
+          <option value="6">Low · 6 steps</option>
+          <option value="8">Fast · 8 steps</option>
+          <option value="10" selected>Balanced · 10 steps</option>
+          <option value="12">Good · 12 steps</option>
+          <option value="14">Detailed · 14 steps</option>
+          <option value="16">High · 16 steps</option>
+          <option value="20">Very high · 20 steps</option>
+          <option value="24">Ultra · 24 steps</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="group tight">
+      <h3>Floor</h3>
+      <label class="inline field">Color <input type="color" id="env-floor-color" value="#8a919c"></label>
+      <label class="field">Pattern
+        <select id="env-floor-style">
+          <option value="0">Solid</option>
+          <option value="1" selected>Checker</option>
+          <option value="2">Grid</option>
+        </select>
+      </label>
+      <label class="field">Gloss <b id="gloss-value" class="mono">0.30</b>
+        <input type="range" id="env-floor-gloss" min="0" max="0.9" step="0.01" value="0.3">
+      </label>
+    </div>
+
+    <div class="group tight">
+      <h3>Lens</h3>
+      <label class="field">Bloom <b id="bloom-value" class="mono">0.35</b>
+        <input type="range" id="fx-bloom" min="0" max="1.5" step="0.01" value="0.35">
+      </label>
+      <label class="field">Aperture (DOF) <b id="aperture-value" class="mono">0.00</b>
+        <input type="range" id="fx-aperture" min="0" max="0.25" step="0.002" value="0">
+      </label>
+      <label class="check"><input type="checkbox" id="fx-focus-auto" checked> Auto-focus on selection</label>
+      <label class="field">Focus distance <b id="focus-value" class="mono">6.0</b>
+        <input type="range" id="fx-focus" min="0.5" max="40" step="0.1" value="6">
+      </label>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-render">
+    <div class="group tight">
+      <h3>Quality Preset</h3>
+      <label class="field">
+        <select id="q-preset">
+          <option value="potato">Potato · integrated GPU</option>
+          <option value="balanced">Balanced</option>
+          <option value="gtx1070" selected>GTX 1070 · recommended</option>
+          <option value="quality">Quality</option>
+          <option value="cinematic">Cinematic · slow</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      <label class="field">Resolution scale
+        <select id="q-scale">
+          <option value="auto" selected>Auto · adaptive</option>
+          <option value="0.25">25%</option>
+          <option value="0.35">35%</option>
+          <option value="0.5">50%</option>
+          <option value="0.75">75%</option>
+          <option value="1">100%</option>
+          <option value="1.5">150%</option>
+          <option value="2">200% · supersample</option>
+        </select>
+      </label>
+      <label class="field">Bounces <b id="bounces-value" class="mono">3</b>
+        <input type="range" id="q-bounces" min="1" max="8" step="1" value="3">
+      </label>
+      <label class="field">Max samples
+        <select id="q-samples">
+          <option value="256">256</option>
+          <option value="1024">1,024</option>
+          <option value="2048" selected>2,048</option>
+          <option value="8192">8,192</option>
+          <option value="16384">16,384</option>
+          <option value="0">Unlimited</option>
+        </select>
+      </label>
+      <label class="field">FPS cap
+        <select id="q-fps">
+          <option value="30">30</option>
+          <option value="60" selected>60</option>
+          <option value="120">120</option>
+          <option value="144">144</option>
+          <option value="240">240</option>
+          <option value="0">Unlimited</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="q-denoise" checked> Temporal denoise <span class="muted">(low-sample preview)</span></label>
+      <label class="check"><input type="checkbox" id="q-outlines" checked> Selection outline</label>
+    </div>
+
+    <div class="group tight">
+      <h3>Graphics Features</h3>
+      <label class="check"><input type="checkbox" id="g-volumetrics" checked> Volumetric fog</label>
+      <label class="check"><input type="checkbox" id="g-bloom" checked> Bloom</label>
+      <label class="check"><input type="checkbox" id="g-dof" checked> Depth of field <span class="muted">(uses aperture)</span></label>
+      <label class="check"><input type="checkbox" id="g-shadows" checked> Sun &amp; neon shadows</label>
+      <label class="check"><input type="checkbox" id="g-reflections" checked> Floor reflections</label>
+      <p class="muted small">Applies instantly to the preview, picture-in-picture and final renders. Turning features off is also the fastest way to raise framerate on a non-RT card.</p>
+    </div>
+
+    <div class="group tight">
+      <h3>Player Camera</h3>
+      <label class="field">FOV <b id="fov-value" class="mono">90°</b>
+        <input type="range" id="cam-fov" min="35" max="120" step="1" value="90">
+      </label>
+      <label class="field">Fly speed <b id="speed-value" class="mono">6.0</b>
+        <input type="range" id="cam-speed" min="1" max="24" step="0.5" value="6">
+      </label>
+      <label class="field">Mouse sensitivity <b id="sens-value" class="mono">1.0×</b>
+        <input type="range" id="cam-sens" min="0.3" max="3" step="0.05" value="1">
+      </label>
+      <label class="check"><input type="checkbox" id="cam-visible" checked> Show camera body in reflections</label>
+      <label class="inline field">Body color <input type="color" id="cam-color" value="#232833"></label>
+    </div>
+
+    <div class="group tight">
+      <h3>Render Camera</h3>
+      <div class="row two gap">
+        <button id="rcam-spawn" class="btn">Spawn</button>
+        <button id="rcam-relocate" class="btn" disabled>Relocate</button>
+      </div>
+      <div class="row two gap">
+        <button id="rcam-remove" class="btn btn-danger" disabled>Remove</button>
+        <button id="rcam-clear" class="btn" disabled>Clear View</button>
+      </div>
+      <label class="check"><input type="checkbox" id="rcam-fly" disabled> Fly render camera</label>
+      <label class="check"><input type="checkbox" id="rcam-pip" checked disabled> Picture-in-picture</label>
+      <label class="check"><input type="checkbox" id="rcam-visible" checked disabled> Camera body visible</label>
+      <label class="field">FOV <b id="rfov-value" class="mono">50°</b>
+        <input type="range" id="rcam-fov" min="20" max="120" step="1" value="50" disabled>
+      </label>
+      <label class="inline field">Body color <input type="color" id="rcam-color" value="#2b3f8f" disabled></label>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-export">
+    <div class="group tight">
+      <h3>Final Render</h3>
+      <p class="muted small">Rendered from the render camera when one exists. Tiles are accumulated independently so 8K never exhausts VRAM.</p>
+      <label class="field">Samples
+        <select id="ex-samples">
+          <option value="100">Low · 100</option>
+          <option value="500">Medium · 500</option>
+          <option value="1500" selected>High · 1,500</option>
+          <option value="5000">Ultra · 5,000</option>
+          <option value="10000">Ultra+ · 10k</option>
+          <option value="50000">Ultra++ · 50k</option>
+          <option value="100000">Paper Bag · 100k</option>
+        </select>
+      </label>
+      <label class="field">Resolution
+        <select id="ex-res">
+          <option value="1280x720">720p · 1280×720</option>
+          <option value="1920x1080">1080p · 1920×1080</option>
+          <option value="2560x1440">1440p · 2560×1440</option>
+          <option value="3840x2160" selected>4K · 3840×2160</option>
+          <option value="7680x4320">8K · 7680×4320</option>
+        </select>
+      </label>
+      <label class="field">Denoiser
+        <select id="ex-denoise">
+          <option value="none">Off · raw path trace</option>
+          <option value="fast">Fast · 2-pass a-trous</option>
+          <option value="balanced" selected>Balanced · 3-pass a-trous</option>
+          <option value="strong">Strong · 4-pass a-trous (low samples)</option>
+        </select>
+      </label>
+      <label class="field">Format
+        <select id="ex-format">
+          <option value="png" selected>PNG</option>
+          <option value="jpg">JPG</option>
+          <option value="webp">WebP</option>
+          <option value="bmp">BMP</option>
+        </select>
+      </label>
+      <button id="btn-render" class="btn btn-render">RENDER</button>
+      <button id="btn-shot2" class="btn wide">Screenshot Viewport</button>
+      <p class="muted small">Exports are tone-mapped. The denoiser filters the HDR buffer before tone mapping, with padded tiles so seams do not appear. Preview bloom stays viewport-only.</p>
+    </div>
+    <div class="group tight">
+      <h3>Scene File</h3>
+      <div class="row two gap">
+        <button id="btn-save2" class="btn">Save JSON</button>
+        <button id="btn-load2" class="btn">Load JSON</button>
+      </div>
+      <p class="muted small">Static and dependency-free — scene files are plain JSON.</p>
+    </div>
+  </div>
+</aside>
+
+<div id="hud">
+  <div class="hud-item"><b id="hud-spp">0</b><span>spp</span></div>
+  <div class="hud-sep"></div>
+  <div class="hud-note" id="hud-note">Progressive accumulation — hold still to converge.</div>
+</div>
+
+<div id="hintbar">
+  <span id="hint-text">WASD move · Mouse look · Click to select · Esc to edit with gizmos</span>
+</div>
+
+<div id="render-overlay">
+  <div class="ro-card">
+    <h2>FINAL RENDER</h2>
+    <p id="ro-phase">Preparing…</p>
+    <div class="ro-bar"><div id="ro-fill"></div></div>
+    <div class="ro-meta">
+      <span id="ro-status">Sample 0 / 0</span>
+      <span id="ro-eta">ETA —</span>
+    </div>
+    <button id="btn-cancel-render" class="btn">Cancel</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-help">
+  <div class="modal-card">
+    <div class="modal-head"><h2>Controls</h2><button class="modal-close" data-close="modal-help">✕</button></div>
+    <div class="modal-body">
+      <div class="keygrid">
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div><span>Fly the camera</span>
+        <div><kbd>Space</kbd><kbd>Ctrl</kbd></div><span>Rise / descend</span>
+        <div><kbd>Shift</kbd></div><span>2.5× fly speed (snap while dragging)</span>
+        <div><kbd>Mouse</kbd></div><span>Look (click <b>Look</b> or double-click canvas)</span>
+        <div><kbd>Esc</kbd></div><span>Release mouse → edit with gizmos</span>
+        <div><kbd>←</kbd><kbd>→</kbd></div><span>Previous / next object</span>
+        <div><kbd>1</kbd><kbd>2</kbd></div><span>Add cube / sphere</span>
+        <div><kbd>Del</kbd></div><span>Delete selection</span>
+        <div><kbd>Ctrl</kbd><kbd>D</kbd></div><span>Duplicate selection</span>
+        <div><kbd>F</kbd></div><span>Screenshot</span>
+        <div><kbd>Tab</kbd></div><span>Toggle mouse look</span>
+        <div><kbd>H</kbd></div><span>This help</span>
+      </div>
+      <h3>Movement gizmos</h3>
+      <p>Select an object (click it, or use the Objects list). In the world a gizmo appears: drag the <b class="c-red">X</b>, <b class="c-green">Y</b> or <b class="c-blue">Z</b> arrow to slide along that axis, or drag the centre cube to move freely on the camera plane. Movement is unlimited — there are no slider clamps. Hold <b>Shift</b> while dragging to snap to a 0.25&nbsp;unit grid.</p>
+      <h3>How this renderer works</h3>
+      <p>Every pixel fires rays from the camera into an analytic scene of boxes, spheres, a glossy floor and camera bodies. Rays scatter through 1–8 bounces for diffuse, metal, glass, glossy and emissive materials. Sun and neon samples are importance-sampled, and volumetrics integrate sun shafts with Henyey–Greenstein scattering. Each frame adds one HDR sample into a float buffer, so the image cleans up asymptotically while you hold still.</p>
+      <h3>Performance notes</h3>
+      <ul>
+        <li>Object data travels in a float texture instead of hundreds of uniforms — more objects, fewer driver limits.</li>
+        <li>Volumetrics trace only on primary rays; indirect bounces skip fog.</li>
+        <li>Adaptive resolution targets a 60&nbsp;fps budget, with auto-denoise at low sample counts.</li>
+        <li>Final renders are tiled, so 4K/8K work at any GPU texture limit.</li>
+        <li>Use the <b>GTX 1070</b> preset for the intended 1080p/0.75-scale experience.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal-about">
+  <div class="modal-card">
+    <div class="modal-head"><h2>About Ray Tracing Demo 4</h2><button class="modal-close" data-close="modal-about">✕</button></div>
+    <div class="modal-body">
+      <p><b>Ray Tracing Demo 4</b> is the fourth recode of a browser ray tracer that started as a “Ray Tracing vs Rasterization” essay and a proof of concept. It is still software ray tracing: no RT cores, no WebGPU, no WebAssembly, no native code — just JavaScript, CSS, HTML and a WebGL2 fragment shader.</p>
+      <p>Demo 3 introduced volumetric lighting, a render camera with picture-in-picture, selection outlines and a 100k-sample export pipeline. Demo 4 keeps every one of those features and rebuilds around them: real movement gizmos, importance-sampled neon and sun lighting, glossy floors, depth of field, bloom, denoise, seven scene presets, scene save/load, 8K tiled exports, and adaptive performance for cards that have no ray tracing hardware at all.</p>
+      <p class="muted">The planned VR/WebXR mode from Demo 3 is intentionally scrapped and not part of this build.</p>
+      <hr>
+      <p><b>About ray tracing:</b> ray tracing simulates light by tracing rays from the camera through a scene. At each surface the ray can diffuse, reflect, refract or be absorbed; shadows are simply rays that never reach the sun. Enough samples converge into soft shadows, colour bleeding, caustic-ish glass and fog lit by every emitter in the scene — effects rasterization has to fake.</p>
+      <p class="muted small">Original project by Brandon Steele · brandonsteeledev@outlook.com. Kept the classics: “sushi was here”, “Who’s Joe? — J.M.”</p>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal-changelog">
+  <div class="modal-card">
+    <div class="modal-head"><h2>Changelog</h2><button class="modal-close" data-close="modal-changelog">✕</button></div>
+    <div class="modal-body">
+      <h3>Demo 4 — “No RT hardware required”</h3>
+      <ul>
+        <li><b>Movement gizmos</b> replace position sliders. X/Y/Z arrows plus a free-plane handle live inside the ray traced world; Shift snaps.</li>
+        <li><b>Lighting rewrite:</b> importance-sampled sun and neon, cosine-weighted diffuse, glossy plastic, metal roughness, adjustable glass IOR.</li>
+        <li><b>Volumetrics v2:</b> sun shafts with Henyey–Greenstein scattering, height fog, emissive glow, 0–24 quality steps, primary-ray only.</li>
+        <li><b>World:</b> glossy checker/grid floors, stars at night, animated sun, seven presets.</li>
+        <li><b>Lens:</b> depth of field with auto-focus, bloom, exposure, temporal denoise, and a final-render HDR denoiser with off/fast/balanced/strong modes.</li>
+        <li><b>Export:</b> tiled 720p → 8K, PNG/JPG/WebP/BMP, live ETA and cancel; viewport screenshot.</li>
+        <li><b>Cameras:</b> spawn, relocate, fly, picture-in-picture, RT body meshes.</li>
+        <li><b>Scenes:</b> JSON save/load, object outliner, remix, selection outlines, camera click-picking.</li>
+        <li><b>Performance:</b> texture-based object upload, adaptive resolution, quality presets, FPS cap.</li>
+        <li>Removed nothing. VR remains scrapped.</li>
+      </ul>
+      <h3>Demo 3 — v1.2</h3>
+      <ul>
+        <li>Volumetric lighting</li>
+        <li>Changelog and info panels</li>
+        <li>Frame limit remover</li>
+        <li>Removed Herobrine</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="error-screen">
+  <div>
+    <h1>WebGL 2.0 unavailable</h1>
+    <p id="error-detail">This demo needs WebGL2 with <code>EXT_color_buffer_float</code> for HDR accumulation. Try a recent Chrome, Edge or Firefox with hardware acceleration enabled.</p>
+  </div>
+</div>
+
+<!-- Bump ?v= on these URLs and on the imports in js/*.js whenever assets change,
+     otherwise browsers can pair a cached script with a newer index.html. -->
+<script type="module" src="./js/main.js?v=6"></script>
+</body>
+</html>
